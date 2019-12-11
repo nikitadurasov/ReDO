@@ -58,6 +58,7 @@ parser.add_argument('--dStepFreq', type=int, default=1, help='wait x steps for D
 parser.add_argument('--temperature', type=float, default=1, help='softmax temperature')
 parser.add_argument('--wdecay', type=float, default=1e-4, help='weight decay for M, default=1e-4')
 parser.add_argument('--wrecZ', type=float, default=5, help='weight for z reconstruction')
+parser.add_argument('--reg_mask', type=float, default=0)
 parser.add_argument('--outf', default='.', help='folder to output images and model checkpoints')
 parser.add_argument('--checkpointFreq', type=int, default=500, help='frequency of checkpoints')
 parser.add_argument('--iteration', type=int, default=0, help="iteration to load (to resume training)")
@@ -293,10 +294,10 @@ while opt.iteration <= opt.nIteration:
     except StopIteration:
         disData = iter(trainloader)
         xLoadD, mLoadD = next(disData)
-    xData = xLoadG.to(device)
-    mData = mLoadG.to(device)
-    xReal = xLoadD.to(device)
-    zData = torch.randn((xData.size(0), opt.nMasks, opt.nz, 1, 1), device=device)
+    xData = xLoadG.to(device) # shape [?, 3, 128, 128]
+    mData = mLoadG.to(device) # shape [?, 1, 128, 128]
+    xReal = xLoadD.to(device) # shape [?, 3, 128, 128]
+    zData = torch.randn((xData.size(0), opt.nMasks, opt.nz, 1, 1), device=device) # shape [?, 2, 32, 1, 1]
     ########################## Reset Nets ############################
     netEncM.zero_grad()
     netGenX.zero_grad()
@@ -314,16 +315,26 @@ while opt.iteration <= opt.nIteration:
     Instead of sampling a region at each iteration, fake images for all regions are computed at each iteration.
     This allow to build an entirely generated image we can feed to the information conservation network instead of partially redrawn images.
     '''
+    
     if gStep:
-        mEnc = netEncM(xData)
-        hGen = netGenX(mEnc, zData)
-        xGen = (hGen + ((1 - mEnc.unsqueeze(2)) * xData.unsqueeze(1))).view(hGen.size(0) * hGen.size(1), hGen.size(2), hGen.size(3), hGen.size(4))
+        mEnc = netEncM(xData) # shape [?, 2, 128, 128]
+        hGen = netGenX(mEnc, zData) # shape [?, 2, 3, 128, 128]
+        
+        xGen = (hGen + ((1 - mEnc.unsqueeze(2)) * xData.unsqueeze(1))).view(hGen.size(0) * hGen.size(1), hGen.size(2), hGen.size(3), hGen.size(4)) # shape [2 * batchSize, 3, 128, 128]
+        
         dGen = netDX(xGen)
         lossG = - dGen.mean()
+        
         if opt.wrecZ > 0:
             zRec = netRecZ(hGen.sum(1))
             err_recZ = ((zData - zRec) * (zData - zRec)).mean()
             lossG += err_recZ * opt.wrecZ
+
+        if opt.reg_mask > 0:
+            objMask = mEnc[:, 0]
+            rMask = ((objMask - 0.5) ** 2).mean()
+            lossG += opt.reg_mask * rMask
+            
         lossG.backward()
         optimizerEncM.step()
         optimizerGenX.step()
