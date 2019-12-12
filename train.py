@@ -75,7 +75,11 @@ parser.add_argument('--silent', action='store_true', help='silent execution')
 parser.add_argument('--autoRestart', type=float, default=0, help='restart training if the ratio "size of region" / "size of image" is stricly smaller than x (collapse detected)')
 
 opt = parser.parse_args()
-reg_params = dict(opt.reg_params)
+
+if opt.reg_params is None:
+    reg_params = dict()
+else:
+    reg_params = dict(opt.reg_params)
 
 if not opt.silent:
     from tqdm import tqdm
