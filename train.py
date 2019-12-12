@@ -25,6 +25,9 @@ import torch.nn.functional as F
 import datasets
 import models
 
+from helpers import parse_float_value
+import regularization
+
 #############################################################################
 # Arguments                                                                 #
 #############################################################################
@@ -58,7 +61,10 @@ parser.add_argument('--dStepFreq', type=int, default=1, help='wait x steps for D
 parser.add_argument('--temperature', type=float, default=1, help='softmax temperature')
 parser.add_argument('--wdecay', type=float, default=1e-4, help='weight decay for M, default=1e-4')
 parser.add_argument('--wrecZ', type=float, default=5, help='weight for z reconstruction')
-parser.add_argument('--reg_mask', type=float, default=0)
+parser.add_argument('--reg_mask', type=float, default=0, help='coefficient for mask regularization')
+parser.add_argument('--reg_type', type=str, default='elementwise_mse', help='type of mask regularization')
+parser.add_argument("--reg_params", action='append',
+                    type=parse_float_value, dest='reg_params')
 parser.add_argument('--outf', default='.', help='folder to output images and model checkpoints')
 parser.add_argument('--checkpointFreq', type=int, default=500, help='frequency of checkpoints')
 parser.add_argument('--iteration', type=int, default=0, help="iteration to load (to resume training)")
@@ -69,6 +75,7 @@ parser.add_argument('--silent', action='store_true', help='silent execution')
 parser.add_argument('--autoRestart', type=float, default=0, help='restart training if the ratio "size of region" / "size of image" is stricly smaller than x (collapse detected)')
 
 opt = parser.parse_args()
+reg_params = dict(opt.reg_params)
 
 if not opt.silent:
     from tqdm import tqdm
@@ -332,8 +339,8 @@ while opt.iteration <= opt.nIteration:
 
         if opt.reg_mask > 0:
             objMask = mEnc[:, 0]
-            rMask = ((objMask - 0.5) ** 2).mean()
-            lossG += opt.reg_mask * rMask
+            regMask = regularization.__dict__[opt.reg_type](objMask, **reg_params)
+            lossG += opt.reg_mask * regMask
             
         lossG.backward()
         optimizerEncM.step()
