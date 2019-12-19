@@ -61,10 +61,16 @@ parser.add_argument('--dStepFreq', type=int, default=1, help='wait x steps for D
 parser.add_argument('--temperature', type=float, default=1, help='softmax temperature')
 parser.add_argument('--wdecay', type=float, default=1e-4, help='weight decay for M, default=1e-4')
 parser.add_argument('--wrecZ', type=float, default=5, help='weight for z reconstruction')
+
+# BEGIN OF OUR CODE
 parser.add_argument('--reg_mask', type=float, default=0, help='coefficient for mask regularization')
 parser.add_argument('--reg_type', type=str, default='elementwise_mse', help='type of mask regularization')
+parser.add_argument('--reg_max_iteration', type=int, default=-1)
 parser.add_argument("--reg_params", action='append',
                     type=parse_float_value, dest='reg_params')
+parser.add_argument("--full_generator", action='store_true', help='use fully generated images for training')
+# END OF OUR CODE
+
 parser.add_argument('--outf', default='.', help='folder to output images and model checkpoints')
 parser.add_argument('--checkpointFreq', type=int, default=500, help='frequency of checkpoints')
 parser.add_argument('--iteration', type=int, default=0, help="iteration to load (to resume training)")
@@ -76,10 +82,15 @@ parser.add_argument('--autoRestart', type=float, default=0, help='restart traini
 
 opt = parser.parse_args()
 
+# BEGIN OF OUR CODE
 if opt.reg_params is None:
     reg_params = dict()
 else:
     reg_params = dict(opt.reg_params)
+
+if opt.reg_max_iteration == -1:
+    opt.reg_max_iteration = opt.nIteration
+# END OF OUR CODE
 
 if not opt.silent:
     from tqdm import tqdm
@@ -330,9 +341,15 @@ while opt.iteration <= opt.nIteration:
     if gStep:
         mEnc = netEncM(xData) # shape [?, 2, 128, 128]
         hGen = netGenX(mEnc, zData) # shape [?, 2, 3, 128, 128]
-        
-        xGen = (hGen + ((1 - mEnc.unsqueeze(2)) * xData.unsqueeze(1))).view(hGen.size(0) * hGen.size(1), hGen.size(2), hGen.size(3), hGen.size(4)) # shape [2 * batchSize, 3, 128, 128]
-        
+
+        # BEGIN OF OUR CODE
+        # Combine generated image with original one if not opt.full_generator else use inly generated image
+        if not opt.full_generator:
+            xGen = (hGen + ((1 - mEnc.unsqueeze(2)) * xData.unsqueeze(1))).view(hGen.size(0) * hGen.size(1), hGen.size(2), hGen.size(3), hGen.size(4)) # shape [2 * batchSize, 3, 128, 128]
+        else:
+            xGen = hGen.sum(dim=1)
+        # END OF OUR CODE
+
         dGen = netDX(xGen)
         lossG = - dGen.mean()
         
@@ -341,10 +358,13 @@ while opt.iteration <= opt.nIteration:
             err_recZ = ((zData - zRec) * (zData - zRec)).mean()
             lossG += err_recZ * opt.wrecZ
 
-        if opt.reg_mask > 0:
+        # BEGIN OF OUR CODE
+        # If required, computes chosen mask regularization and add it to generator loss
+        if opt.reg_mask > 0 and opt.iteration <= opt.reg_max_iteration:
             objMask = mEnc[:, 0]
             regMask = regularization.__dict__[opt.reg_type](objMask, **reg_params)
             lossG += opt.reg_mask * regMask
+        # END OF OUR CODE
             
         lossG.backward()
         optimizerEncM.step()
